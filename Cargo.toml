@@ -11,3 +11,8 @@ deno_core = "0.51.0"
 derive_deref = "1.1.0"
 tokio = { version = "0.2.22", features = ["full"] }
 pin-project = "0.4"
+actix-web = "2.0"
+actix-files = "0.2.2"
+actix-rt = "1.0.0"
+log = "0.4.11"
+env_logger = "0.7.1"

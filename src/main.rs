@@ -3,141 +3,72 @@ extern crate derive_deref;
 extern crate deno_core;
 extern crate pin_project;
 
-use deno_core::CoreIsolate;
-use deno_core::CoreIsolateState;
-use deno_core::Op;
-use deno_core::ResourceTable;
-use deno_core::Script;
-use deno_core::StartupData;
-use deno_core::ZeroCopyBuf;
+mod deno_runtime;
+mod tsc_processor;
 
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::future::{ Future };
-use std::str;
-use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
-use pin_project::pin_project;
+// use actix_files::Files;
+use actix_web::{ HttpRequest, HttpResponse };
+use tokio::runtime::Builder;
 
-use std::sync::mpsc::channel;
+// use log::{ Level, Metadata, Record };
 
 
-#[tokio::main]
-async fn main() {
-    let result = process("Test String".to_owned()).await;
-    assert!(result == "TEST STRING");
-    println!("Test string returned in upper case.")
+pub async fn root_handler(req: HttpRequest,
+  _body: actix_web::web::Payload) -> actix_web::HttpResponse {
+
+    let script_output = deno_runtime::run_string_script("
+    var ops = Deno.core.ops();
+    var input_str = utf8ArrayToString(Deno.core.dispatch(ops['get_string']));
+    var output_str = `<html>
+    <head>
+      <title>This page is for ${input_str}</title>
+    </head>
+    <body>
+      Hello, ${input_str}
+    </body>
+</html>`
+    Deno.core.dispatch(ops['return_string'], to_uint8array(output_str));",
+    req.path().to_owned());
+
+    HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .body(script_output)
+
 }
 
-async fn process(test_string: String) -> String {
 
-    let (tx, rx) = channel();
+pub fn main() {
+  #[cfg(windows)]
+  colors::enable_ansi(); // For Windows 10
 
-    let mut iso: Isolate = Isolate::new();
+  env_logger::init();
 
-    iso.register_sync_op("return_string", move |_, zero_copy_bufs: &mut [ZeroCopyBuf]| {
-        let buf = zero_copy_bufs[0].clone();
-        let result = str::from_utf8(&*buf).unwrap().to_owned();
-        tx.send(result).unwrap();
-        "".to_owned()
-    });
+  // let args: Vec<String> = env::args().collect();
+  // let mut flags = deno_cli::flags::flags_from_vec(args);
 
-    iso.register_sync_op("get_string", move |_, _zero_copy_bufs: &mut [ZeroCopyBuf]| {
-        test_string.clone()
-    });
+  let mut single_rt = Builder::new()
+      .basic_scheduler()
+      .enable_all()
+      .build()
+      .unwrap();
 
+  let local = tokio::task::LocalSet::new();
+  let system_fut = actix_rt::System::run_in_tokio("main", &local);
+  local.block_on(&mut single_rt, async {
+    tokio::task::spawn_local(system_fut);
 
-    iso.core_isolate.execute("AfterPrelude", include_str!("../res/testfile.js")).unwrap();
+    println!("SETUP:");
+    println!("{}", tsc_processor::run("Compile me.".to_owned()));
 
-    rx.recv().unwrap()
-    // iso.await.unwrap();
-}
+    let _ = actix_web::HttpServer::new(|| {
 
-#[pin_project]
-struct Isolate {
-    #[pin]
-    core_isolate: CoreIsolate,
-    state: State,
-}
-
-#[derive(Clone, Default, Deref)]
-struct State(Rc<RefCell<StateInner>>);
-
-#[derive(Default)]
-struct StateInner {
-    resource_table: ResourceTable,
-}
-
-impl Future for Isolate {
-    type Output = <CoreIsolate as Future>::Output;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let this = self.project();
-        this.core_isolate.poll(cx)
-    }
-}
-
-impl Isolate {
-    pub fn new() -> Self {
-        let startup_data = StartupData::Script(Script {
-            source: include_str!("../res/prelude.js"),
-            filename: "testfile.js",
-        });
-
-        let isolate = Self {
-            core_isolate: CoreIsolate::new(startup_data, false),
-            state: Default::default(),
-        };
-
-        isolate
-    }
-
-    fn register_sync_op<F>(&mut self, name: &'static str, handler: F)
-    where
-    F: 'static + Fn(State, &mut [ZeroCopyBuf]) -> String //Result<u32, Box<dyn Error>>,
-    {
-        let state = self.state.clone();
-        let core_handler = move |_isolate_state: &mut CoreIsolateState,
-        mut zero_copy_bufs: &mut [ZeroCopyBuf]|
-        -> Op {
-            // assert!(!zero_copy_bufs.is_empty());
-            let state = state.clone();
-
-            let result: String = handler(state, &mut zero_copy_bufs);
-
-            // let buf: &[u8] = if zero_copy_bufs.len() > 0 { &zero_copy_bufs[0] } else { &[] };
-            let buf = result.as_bytes();
-
-            Op::Sync(Box::from(buf))
-        };
-
-        self.core_isolate.register_op(name, core_handler);
-    }
-
-    fn register_op<F>(
-        &mut self,
-        name: &'static str,
-        handler: impl Fn(State, &mut Box::<[u8]>) -> F + Copy + 'static,
-    ) where
-    F: Future::<Output = i32>,
-    {
-        let state = self.state.clone();
-        let core_handler = move |_isolate_state: &mut CoreIsolateState,
-        zero_copy_bufs: &mut [ZeroCopyBuf]|
-        -> Op {
-            assert!(!zero_copy_bufs.is_empty());
-            let state = state.clone();
-            let mut buf: Box<[u8]> = Box::from(&zero_copy_bufs[0] as &[u8]);
-
-            let fut = async move {
-                let _op = handler(state, &mut buf).await;
-                buf
-            };
-
-            Op::Async(Box::pin(fut))
-        };
-
-        self.core_isolate.register_op(name, core_handler);
-    }
+        actix_web::App::new()
+            .service(actix_web::web::resource("*").to(root_handler))
+            
+    })
+        .bind("127.0.0.1:8083")
+        .unwrap()
+        .run()
+        .await;
+  });
 }
