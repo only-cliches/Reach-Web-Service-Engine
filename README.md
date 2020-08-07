@@ -1,4 +1,3 @@
-# deno_core_io
+# Reach Web Service Engine
 
-A minimal example of running embedded deno with unicode string io handled by
-ops.
+The core runtime and engine for the Reach Web Service.
