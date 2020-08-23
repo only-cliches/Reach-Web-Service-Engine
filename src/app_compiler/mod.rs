@@ -6,7 +6,7 @@ use walkdir::WalkDir;
 
 use std::fs::{copy, create_dir_all, File};
 use std::io::prelude::*;
-use std::path::PathBuf;
+use std::path::{ PathBuf, Path };
 use std::time::Instant;
 
 const COMPILE_EXTS: [&str; 3] = ["ts", "tsx", "jsx"];
@@ -34,6 +34,7 @@ pub fn compile_all() {
         }
     }
 
+    // Show a progress spinner and a final duration once everything's compiled.
     let spinner_style = ProgressStyle::default_spinner().template("Compiling {wide_msg}");
 
     let count: u64 = list.len() as u64;
@@ -50,19 +51,6 @@ pub fn compile_all() {
     let completed = format!("completed in {}", HumanDuration(started.elapsed()));
 
     pb.finish_with_message(&completed);
-    // for maybe_entry in WalkDir::new("apps") {
-    //     if let Ok(entry) = maybe_entry {
-    //
-    //         let needs_compilation: bool = entry.path().extension().map_or(false, |ext| {
-    //             ext.to_str()
-    //                 .map_or(false, |s| COMPILE_EXTS.iter().any(|x| x == &s))
-    //         });
-    //         if is_in_src && needs_compilation {
-    //             println!("Compiling: {}", entry.path().display());
-    //             compile_specific(entry.path());
-    //         }
-    //     }
-    // }
 }
 
 pub struct Targets {
@@ -70,6 +58,14 @@ pub struct Targets {
     client: PathBuf,
 }
 
+fn needs_compilation(path: &Path) -> bool {
+    path.extension().map_or(false, |ext| {
+        ext.to_str()
+            .map_or(false, |s| COMPILE_EXTS.iter().any(|x| x == &s))
+    })
+}
+
+// Accepts a relative path to the root directory.
 pub fn construct_target_paths(path_buf: &PathBuf) -> Targets {
     let path = path_buf;
 
@@ -99,12 +95,7 @@ pub fn construct_target_paths(path_buf: &PathBuf) -> Targets {
         client.push(component);
     }
 
-    let needs_compilation: bool = path.extension().map_or(false, |ext| {
-        ext.to_str()
-            .map_or(false, |s| COMPILE_EXTS.iter().any(|x| x == &s))
-    });
-
-    if needs_compilation {
+    if needs_compilation(&path) {
         server.set_extension("js");
         client.set_extension("js");
     }
@@ -112,18 +103,14 @@ pub fn construct_target_paths(path_buf: &PathBuf) -> Targets {
     Targets { server, client }
 }
 
+// Accepts a relative path to the root directory.
 pub fn compile_specific(path: &PathBuf) {
     let target = construct_target_paths(path);
 
     create_dir_all(target.server.parent().unwrap()).unwrap();
     create_dir_all(target.client.parent().unwrap()).unwrap();
 
-    let needs_compilation: bool = path.extension().map_or(false, |ext| {
-        ext.to_str()
-            .map_or(false, |s| COMPILE_EXTS.iter().any(|x| x == &s))
-    });
-
-    if needs_compilation {
+    if needs_compilation(&path) {
         match File::open(path) {
             Ok(mut f) => {
                 let mut content = String::new();

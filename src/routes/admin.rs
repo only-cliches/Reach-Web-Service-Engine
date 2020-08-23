@@ -68,6 +68,8 @@ async fn delete_domain(
     "Unimplemented".into()
 }
 
+// Returning a vec means that the whole set of admin resources can be built all at once here, and
+// attached to the app where needed.
 pub fn resources() -> Vec<Resource> {
     config::init();
     vec![

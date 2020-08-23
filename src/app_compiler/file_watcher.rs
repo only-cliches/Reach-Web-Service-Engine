@@ -11,6 +11,8 @@ use super::{compile_specific, construct_target_paths, TARGET};
 
 const FOLDER: &str = "apps";
 
+// MaybeWatcher lets start and stop be idempotent operations. Pass in whatever you've got, and the
+// functions will figure out what needs to happen.
 pub type MaybeWatcher = Option<RecommendedWatcher>;
 
 pub fn start(maybe_watcher: MaybeWatcher) -> MaybeWatcher {
@@ -51,7 +53,7 @@ fn handle_event(event: Event) {
 
     if !is_in_target {
         let local_path = local_path.to_path_buf();
-        match event.kind.clone() {
+        match event.kind {
             Remove(RemoveKind::File) => delete_file(local_path),
             Remove(RemoveKind::Folder) => delete_folder(local_path),
             Modify(Name(RenameMode::From)) => delete_file(local_path),
