@@ -1,14 +1,16 @@
 #[macro_use]
 extern crate derive_deref;
+#[macro_use]
+extern crate lazy_static;
 extern crate deno_core;
 extern crate pin_project;
 
 mod app_compiler;
 mod deno_runtime;
-mod tsc_processor;
+mod routes;
 
 // use actix_files::Files;
-use actix_web::{HttpRequest, HttpResponse};
+use actix_web::{web, HttpRequest, HttpResponse};
 use tokio::runtime::Builder;
 
 // use log::{ Level, Metadata, Record };
@@ -63,7 +65,12 @@ pub fn main() {
 
         // Do not do application-wide initialization beyond this point.
         let _ = actix_web::HttpServer::new(|| {
-            actix_web::App::new().service(actix_web::web::resource("*").to(root_handler))
+            println!("THREAD STARTED");
+            let mut app = actix_web::App::new();
+            for res in routes::admin::resources() {
+                app = app.service(res);
+            }
+            app.service(web::resource("*").to(root_handler))
         })
         .bind("127.0.0.1:8083")
         .unwrap()

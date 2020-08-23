@@ -26,15 +26,21 @@ pub fn run(compilation_string: String) -> String {
     );
 
     iso.core_isolate
-        .execute("RequireJS", include_str!("../res/require.js"))
+        .execute("RequireJS", include_str!("../../res/require.js"))
         .unwrap();
 
     iso.core_isolate
-        .execute("Typescript", include_str!("../res/typescript/index.min.js"))
+        .execute(
+            "Typescript",
+            include_str!("../../res/typescript/index.min.js"),
+        )
         .unwrap();
 
     iso.core_isolate
-        .execute("Retrieve and process", include_str!("../res/typescript/deno_adapter.js"))
+        .execute(
+            "Retrieve and process",
+            include_str!("../../res/typescript/deno_adapter.js"),
+        )
         .unwrap();
 
     rx.recv().unwrap()

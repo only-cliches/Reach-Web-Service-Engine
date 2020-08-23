@@ -29,7 +29,7 @@ pub struct State(Rc<RefCell<StateInner>>);
 
 #[derive(Default)]
 pub struct StateInner {
-    resource_table: ResourceTable,
+    _resource_table: ResourceTable,
 }
 
 impl Future for Isolate {
@@ -78,7 +78,7 @@ impl Isolate {
         self.core_isolate.register_op(name, core_handler);
     }
 
-    pub fn register_op<F>(
+    pub fn _register_op<F>(
         &mut self,
         name: &'static str,
         handler: impl Fn(State, &mut Box<[u8]>) -> F + Copy + 'static,
