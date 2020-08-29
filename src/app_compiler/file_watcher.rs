@@ -77,6 +77,8 @@ fn delete_file(local_path: PathBuf) {
     };
 }
 
+// This gets called on a folder rename too. Catch folders and compile them differently. Probably
+// via another file walker TODO
 fn recompile(local_path: PathBuf) {
     println!("Compiling: {:?}", &local_path);
     compile_specific(&local_path);

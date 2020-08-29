@@ -6,7 +6,7 @@ use walkdir::WalkDir;
 
 use std::fs::{copy, create_dir_all, File};
 use std::io::prelude::*;
-use std::path::{ PathBuf, Path };
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 const COMPILE_EXTS: [&str; 3] = ["ts", "tsx", "jsx"];

@@ -597,6 +597,8 @@ dependencies = [
  "log",
  "notify",
  "pin-project",
+ "serde",
+ "serde_json",
  "tokio",
  "walkdir",
 ]

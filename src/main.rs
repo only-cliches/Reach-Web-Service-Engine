@@ -4,6 +4,7 @@ extern crate derive_deref;
 extern crate lazy_static;
 extern crate deno_core;
 extern crate pin_project;
+extern crate serde;
 
 mod app_compiler;
 mod deno_runtime;
@@ -11,7 +12,6 @@ mod routes;
 
 // use actix_files::Files;
 use actix_web::{web, HttpRequest, HttpResponse};
-use tokio::runtime::Builder;
 
 // use log::{ Level, Metadata, Record };
 
@@ -40,7 +40,8 @@ pub async fn root_handler(
         .body(script_output)
 }
 
-pub fn main() {
+#[tokio::main]
+pub async fn main() {
     #[cfg(windows)]
     colors::enable_ansi(); // For Windows 10
 
@@ -49,22 +50,22 @@ pub fn main() {
     // let args: Vec<String> = env::args().collect();
     // let mut flags = deno_cli::flags::flags_from_vec(args);
 
-    let mut single_rt = Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    // let mut runtime = Builder::new()
+    //     .threaded_scheduler()
+    //     .enable_all()
+    //     .build()
+    //     .unwrap();
 
     let local = tokio::task::LocalSet::new();
-    let system_fut = actix_rt::System::run_in_tokio("main", &local);
-    local.block_on(&mut single_rt, async {
-        tokio::task::spawn_local(system_fut);
-
+    let _system_fut = actix_rt::System::run_in_tokio("main", &local);
+    async {
         println!("SETUP:");
         app_compiler::compile_all();
+        routes::admin::init().await;
+        // let control_panel = app_servers::start_app("control-panel").await;
 
         // Do not do application-wide initialization beyond this point.
-        let _ = actix_web::HttpServer::new(|| {
+        let server: actix_web::dev::Server = actix_web::HttpServer::new(|| {
             println!("THREAD STARTED");
             let mut app = actix_web::App::new();
             for res in routes::admin::resources() {
@@ -74,7 +75,8 @@ pub fn main() {
         })
         .bind("127.0.0.1:8083")
         .unwrap()
-        .run()
-        .await;
-    });
+        .run();
+        server.await.unwrap();
+    }
+    .await;
 }
