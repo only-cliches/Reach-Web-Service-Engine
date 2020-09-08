@@ -1,5 +1,6 @@
-use actix_web::{http::StatusCode, web, HttpRequest, HttpResponse, Resource};
-use std::error::Error;
+use http::method::Method;
+use warp::{ Filter, Rejection, Reply, reply::with_status, reject::Reject };
+use std::convert::Infallible;
 
 mod app_servers;
 
@@ -10,9 +11,9 @@ mod config {
     use super::app_servers;
     use crate::app_compiler::file_watcher;
 
-    use actix_web::dev::Server;
     use serde::Serialize;
     use tokio::sync::RwLock;
+    use tokio::sync::oneshot;
 
     use std::collections::HashMap;
     use std::error::Error;
@@ -23,12 +24,12 @@ mod config {
 
     pub struct AdminState {
         compile_watcher: file_watcher::MaybeWatcher,
-        servers: HashMap<String, app_servers::AppCluster>,
+        servers: HashMap<String, oneshot::Sender<()>>,
     }
 
     impl AdminState {
         pub fn new() -> AdminState {
-            let servers: HashMap<String, app_servers::AppCluster> = HashMap::new();
+            let servers: HashMap<String, oneshot::Sender<()>> = HashMap::new();
             AdminState {
                 compile_watcher: file_watcher::start(None),
                 servers,
@@ -71,7 +72,7 @@ mod config {
             Ok(false)
         } else {
             println!("{:?}", name);
-            let srv: app_servers::AppCluster = app_servers::start(name.clone()).await?;
+            let srv = app_servers::start(name.clone());
             config.servers.insert(name, srv);
             Ok(true)
         }
@@ -79,73 +80,65 @@ mod config {
 
     pub async fn stop_app_server(name: String) {
         let mut config = CONFIGURATION.write().await;
-        let srv: Option<app_servers::AppCluster> = config.servers.remove(&name);
-        srv.map(|server| server.stop());
+        let srv: Option<oneshot::Sender<()>> = config.servers.remove(&name);
+        srv.map(|server| ());
     }
 
     pub async fn init() {
         lazy_static::initialize(&CONFIGURATION);
         let mut config = CONFIGURATION.write().await;
         let panel = "control-panel".to_string();
-        let srv: app_servers::AppCluster = app_servers::start(panel.clone())
-            .await
-            .expect("Cannot init control panel.");
+        let srv = app_servers::start(panel.clone());
         config.servers.insert(panel, srv);
     }
 }
 
-async fn put_file_watcher(
-    _req: HttpRequest,
-    _body: actix_web::web::Payload,
-) -> actix_web::HttpResponse {
-    config::start_file_watcher().await;
-    "Started".into()
-}
-
-async fn delete_file_watcher(
-    _req: HttpRequest,
-    _body: actix_web::web::Payload,
-) -> actix_web::HttpResponse {
-    config::stop_file_watcher().await;
-    "Stopped".into()
-}
-
-async fn get_apps() -> web::Json<Vec<config::ServerStatus>> {
-    let apps = app_servers::get_app_names();
-    let app_statuses = config::get_app_statuses(apps).await;
-    web::Json(app_statuses)
-}
-
-async fn put_app(
-    _req: HttpRequest,
-    app_name: web::Path<String>,
-    _body: actix_web::web::Payload,
-) -> actix_web::HttpResponse {
-    match config::start_app_server(app_name.clone()).await {
-        Ok(is_new) => {
-            if is_new {
-                format!("Loaded app {}", app_name).into()
-            } else {
-                format!("App {} was already running", app_name).into()
-            }
-        }
-        Err(e) => {
-            eprintln!("Error loading {}:\n{:?}", app_name, e);
-            HttpResponse::with_body(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "500 Internal Error".into(),
-            )
-        }
+async fn file_watcher(method: Method) -> Result<impl warp::Reply, Rejection> {
+    match method {
+        Method::PUT => {
+            config::start_file_watcher().await;
+            Ok(with_status("Started", http::StatusCode::OK))
+        },
+        Method::DELETE => {
+            config::stop_file_watcher().await;
+            Ok(with_status("Stopped", http::StatusCode::OK))
+        },
+        _ => Ok(with_status("Invalid method", http::StatusCode::METHOD_NOT_ALLOWED))
     }
 }
 
-async fn delete_app(
-    _req: HttpRequest,
-    name: String,
-    _body: actix_web::web::Payload,
-) -> actix_web::HttpResponse {
+#[derive(Debug)]
+enum AdminError {
+    AppSerializeError,
+    DomainLoadingError,
+}
+impl Reject for AdminError {}
+
+async fn get_apps() -> Result<String, Rejection> {
+    let apps = app_servers::get_app_names();
+    let app_statuses = config::get_app_statuses(apps).await;
+    serde_json::to_string(&app_statuses).map_err(|e| warp::reject::custom(AdminError::AppSerializeError))
+}
+
+async fn put_app( app_name: String ) -> Result<String, Rejection> {
+    config::start_app_server(app_name.clone())
+        .await
+        .map(|is_new| {
+            if is_new {
+                format!("Loaded app {}", app_name).to_string()
+            } else {
+                format!("App {} was already running", app_name).to_string()
+            }
+        })
+        .map_err(|e| {
+            eprintln!("Error loading {}:\n{:?}", app_name, e);
+            warp::reject::custom(AdminError::DomainLoadingError)
+        })
+}
+
+async fn delete_app( name: String ) -> Result<String, Infallible> {
     config::stop_app_server(name).await;
-    "Closed".into()
+    Ok("Closed".into())
 }
 
 pub async fn init() {
@@ -154,14 +147,32 @@ pub async fn init() {
 
 // Returning a vec means that the whole set of admin resources can be built all at once here, and
 // attached to the app where needed.
-pub fn resources() -> Vec<Resource> {
-    vec![
-        web::resource("/api/admin/file_watcher")
-            .route(web::put().to(put_file_watcher))
-            .route(web::delete().to(delete_file_watcher)),
-        web::resource("/api/admin/apps").route(web::get().to(get_apps)),
-        web::resource("/api/admin/apps/{app_name}")
-            .route(web::put().to(put_app))
-            .route(web::delete().to(delete_app)),
-    ]
+pub fn resources() -> impl warp::Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let admin_path = warp::path("api")
+            .and(warp::path("admin"));
+
+    let file_watcher = admin_path
+        .and(warp::path("file_watcher"))
+        .and(warp::method())
+        .and_then(file_watcher);
+
+    let apps = admin_path
+        .and(warp::path("apps"));
+
+    let get_apps_route = apps
+        .and(warp::get())
+        .and_then(get_apps);
+
+    let put_app_route = apps
+        .and(warp::path::param())
+        .and(warp::put())
+        .and_then(put_app);
+
+    let delete_app_route = apps
+        .and(warp::path::param())
+        .and(warp::delete())
+        .and_then(delete_app);
+
+    file_watcher.or(get_apps_route).or(put_app_route).or(delete_app_route)
+
 }
