@@ -11,6 +11,7 @@ use std::time::Instant;
 
 const COMPILE_EXTS: [&str; 3] = ["ts", "tsx", "jsx"];
 pub const TARGET: &str = "target";
+pub const PUBLIC: &str = "public";
 const SERVER: &str = "server";
 const CLIENT: &str = "client";
 
@@ -27,7 +28,7 @@ pub fn compile_all() {
         let file_type = entry.file_type();
         let path = entry.path();
 
-        let is_in_target = path.iter().skip(2).next().unwrap_or("".as_ref()) == TARGET;
+        let is_in_target = path.iter().skip(3).next().unwrap_or("".as_ref()) == TARGET;
 
         if file_type.is_file() && !is_in_target {
             list.push(path.to_path_buf())
@@ -75,20 +76,26 @@ pub fn construct_target_paths(path_buf: &PathBuf) -> Targets {
     let mut path_iter = path.iter();
 
     let apps_folder = path_iter.next().unwrap();
+    
+    let org = path_iter.next().unwrap();
+    let app = path_iter.next().unwrap();
 
     server.push(apps_folder);
-    client.push(apps_folder);
+    server.push(org);
+    server.push(app);
+    server.push(TARGET);
+    server.push(SERVER);
 
-    let app = path_iter.next().unwrap();
+    client.push(PUBLIC);
+
+    server.push(org);
+    client.push(org);
 
     server.push(app);
     client.push(app);
 
-    server.push(TARGET);
-    client.push(TARGET);
-
-    server.push(SERVER);
-    client.push(CLIENT);
+    server.push("1_0"); //TODO: Pull this from the manifest.
+    client.push("1_0");
 
     while let Some(component) = path_iter.next() {
         server.push(component);

@@ -1,19 +1,19 @@
 use http::method::Method;
-use warp::{ Filter, Rejection, Reply, reply::with_status, reject::Reject };
 use std::convert::Infallible;
+use warp::{reject::Reject, reply::with_status, Filter, Rejection, Reply};
 
-mod app_servers;
+mod domain_servers;
 
 // This is a private, hidden module containing a static admin configuration object. This is built
 // this way to prevent using these functions in any route except /api/admin, also defined below.
 mod config {
 
-    use super::app_servers;
+    use super::domain_servers;
+    use super::domain_servers::Domain;
     use crate::app_compiler::file_watcher;
 
     use serde::Serialize;
     use tokio::sync::RwLock;
-    use tokio::sync::oneshot;
 
     use std::collections::HashMap;
     use std::error::Error;
@@ -24,12 +24,12 @@ mod config {
 
     pub struct AdminState {
         compile_watcher: file_watcher::MaybeWatcher,
-        servers: HashMap<String, oneshot::Sender<()>>,
+        servers: HashMap<String, Domain>,
     }
 
     impl AdminState {
         pub fn new() -> AdminState {
-            let servers: HashMap<String, oneshot::Sender<()>> = HashMap::new();
+            let servers: HashMap<String, Domain> = HashMap::new();
             AdminState {
                 compile_watcher: file_watcher::start(None),
                 servers,
@@ -55,40 +55,43 @@ mod config {
         config.compile_watcher = file_watcher::stop(watcher);
     }
 
-    pub async fn get_app_statuses(names: Vec<String>) -> Vec<ServerStatus> {
+    pub async fn get_domain_statuses() -> Result<String, serde_json::Error> {
         let config = CONFIGURATION.read().await;
-        names
-            .into_iter()
-            .map(|name| {
-                let is_running = config.servers.contains_key(&name);
-                ServerStatus { name, is_running }
-            })
-            .collect()
+        serde_json::to_string(&config.servers)
+        // names
+        //     .into_iter()
+        //     .map(|name| {
+        //         let is_running = config.servers.contains_key(&name);
+        //         ServerStatus { name, is_running }
+        //     })
+        //     .collect()
     }
 
-    pub async fn start_app_server(name: String) -> Result<bool, Box<dyn Error>> {
+    pub async fn start_domain_server(name: String) -> Result<bool, Box<dyn Error>> {
         let mut config = CONFIGURATION.write().await;
         if config.servers.contains_key(&name) {
             Ok(false)
         } else {
-            println!("{:?}", name);
-            let srv = app_servers::start(name.clone());
+            println!("{} not already active", name);
+            let srv = domain_servers::start(name.clone());
             config.servers.insert(name, srv);
             Ok(true)
         }
     }
 
-    pub async fn stop_app_server(name: String) {
+    pub async fn stop_domain_server(name: String) {
         let mut config = CONFIGURATION.write().await;
-        let srv: Option<oneshot::Sender<()>> = config.servers.remove(&name);
-        srv.map(|server| ());
+        let srv: Option<Domain> = config.servers.remove(&name);
+        srv.map(|server| {
+            server.stop();
+        });
     }
 
     pub async fn init() {
         lazy_static::initialize(&CONFIGURATION);
         let mut config = CONFIGURATION.write().await;
         let panel = "control-panel".to_string();
-        let srv = app_servers::start(panel.clone());
+        let srv = domain_servers::start(panel.clone());
         config.servers.insert(panel, srv);
     }
 }
@@ -98,12 +101,15 @@ async fn file_watcher(method: Method) -> Result<impl warp::Reply, Rejection> {
         Method::PUT => {
             config::start_file_watcher().await;
             Ok(with_status("Started", http::StatusCode::OK))
-        },
+        }
         Method::DELETE => {
             config::stop_file_watcher().await;
             Ok(with_status("Stopped", http::StatusCode::OK))
-        },
-        _ => Ok(with_status("Invalid method", http::StatusCode::METHOD_NOT_ALLOWED))
+        }
+        _ => Ok(with_status(
+            "Invalid method",
+            http::StatusCode::METHOD_NOT_ALLOWED,
+        )),
     }
 }
 
@@ -114,65 +120,64 @@ enum AdminError {
 }
 impl Reject for AdminError {}
 
-async fn get_apps() -> Result<String, Rejection> {
-    let apps = app_servers::get_app_names();
-    let app_statuses = config::get_app_statuses(apps).await;
-    serde_json::to_string(&app_statuses).map_err(|e| warp::reject::custom(AdminError::AppSerializeError))
+async fn get_domains() -> Result<String, Rejection> {
+    config::get_domain_statuses().await
+        .map_err(|e| warp::reject::custom(AdminError::AppSerializeError))
 }
 
-async fn put_app( app_name: String ) -> Result<String, Rejection> {
-    config::start_app_server(app_name.clone())
+async fn put_domain(domain_name: String) -> Result<String, Rejection> {
+    config::start_domain_server(domain_name.clone())
         .await
         .map(|is_new| {
             if is_new {
-                format!("Loaded app {}", app_name).to_string()
+                format!("Loaded domain {}", domain_name).to_string()
             } else {
-                format!("App {} was already running", app_name).to_string()
+                format!("App {} was already running", domain_name).to_string()
             }
         })
         .map_err(|e| {
-            eprintln!("Error loading {}:\n{:?}", app_name, e);
+            eprintln!("Error loading {}:\n{:?}", domain_name, e);
             warp::reject::custom(AdminError::DomainLoadingError)
         })
 }
 
-async fn delete_app( name: String ) -> Result<String, Infallible> {
-    config::stop_app_server(name).await;
+async fn delete_domain(name: String) -> Result<String, Infallible> {
+    config::stop_domain_server(name).await;
     Ok("Closed".into())
 }
 
 pub async fn init() {
     config::init().await;
+
+    put_domain("example_domain".to_string()).await.unwrap();
 }
 
 // Returning a vec means that the whole set of admin resources can be built all at once here, and
-// attached to the app where needed.
+// attached to the domain where needed.
 pub fn resources() -> impl warp::Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    let admin_path = warp::path("api")
-            .and(warp::path("admin"));
+    let admin_path = warp::path("api").and(warp::path("admin"));
 
     let file_watcher = admin_path
         .and(warp::path("file_watcher"))
         .and(warp::method())
         .and_then(file_watcher);
 
-    let apps = admin_path
-        .and(warp::path("apps"));
+    let domains = admin_path.and(warp::path("domains"));
 
-    let get_apps_route = apps
-        .and(warp::get())
-        .and_then(get_apps);
+    let get_domains_route = domains.and(warp::get()).and_then(get_domains);
 
-    let put_app_route = apps
+    let put_domain_route = domains
         .and(warp::path::param())
         .and(warp::put())
-        .and_then(put_app);
+        .and_then(put_domain);
 
-    let delete_app_route = apps
+    let delete_domain_route = domains
         .and(warp::path::param())
         .and(warp::delete())
-        .and_then(delete_app);
+        .and_then(delete_domain);
 
-    file_watcher.or(get_apps_route).or(put_app_route).or(delete_app_route)
-
+    file_watcher
+        .or(get_domains_route)
+        .or(put_domain_route)
+        .or(delete_domain_route)
 }

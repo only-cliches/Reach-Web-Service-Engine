@@ -7,9 +7,10 @@ extern crate pin_project;
 extern crate serde;
 
 mod app_compiler;
+mod database;
 mod deno_runtime;
 mod routes;
-mod database;
+mod util;
 
 // use log::{ Level, Metadata, Record };
 //
@@ -37,7 +38,6 @@ mod database;
 //         .content_type("text/html; charset=utf-8")
 //         .body(script_output)
 // }
-
 
 #[tokio::main]
 pub async fn main() {
@@ -81,8 +81,7 @@ pub async fn main() {
 
         let admin_server = warp::serve(admin_routes);
         println!("Admin server loaded");
-        admin_server.run(([127u8,0,0,1], 8083u16)).await;
-
+        admin_server.run(([127u8, 0, 0, 1], 8083u16)).await;
     }
     .await;
 }

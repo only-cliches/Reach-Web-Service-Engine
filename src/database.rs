@@ -1,19 +1,19 @@
 use std::char::from_u32;
-use std::str::from_utf8;
-use std::io::Bytes;
-use std::sync::Arc;
-use std::error::Error;
 use std::fmt::Debug;
+use std::str::from_utf8;
+use std::sync::Arc;
 
-use rocksdb::{DB, Options};
-use warp::{ Filter, Reply, Rejection, http::StatusCode };
+use rocksdb::{ ReadOptions, DB, IteratorMode };
 use unicode_normalization::UnicodeNormalization;
+use warp::{http::StatusCode, Filter, Rejection, Reply};
+use serde_json;
 
 use self::DBError::*;
+use crate::util::LogToOk;
 
 const RECORD_SEP: char = '\u{1E}';
 const UNIT_SEP: char = '\u{1F}';
-const SEPARATORS: [char; 2] = [ RECORD_SEP, UNIT_SEP ];
+const SEPARATORS: [char; 2] = [RECORD_SEP, UNIT_SEP];
 
 // Unicode constants
 const LAST_LOW_VALID: u32 = 0xD800 - 1;
@@ -21,12 +21,11 @@ const LAST_SURROGATE: u32 = 0xDFFF;
 const UNICODE_LIMIT: u32 = 0x10FFFF;
 
 pub fn unicode_successor(letter: char) -> Option<char> {
-
     let old_hex = letter as u32;
     if old_hex < LAST_LOW_VALID {
         from_u32(old_hex + 1)
     } else if old_hex == LAST_LOW_VALID {
-        from_u32(LAST_SURROGATE+1)
+        from_u32(LAST_SURROGATE + 1)
     } else if old_hex < LAST_SURROGATE {
         None
     } else if old_hex < UNICODE_LIMIT {
@@ -36,9 +35,10 @@ pub fn unicode_successor(letter: char) -> Option<char> {
     }
 }
 
-pub fn string_successor(string: String) -> Option<String> {
+pub fn string_successor(string: &String) -> Option<String> {
     let mut output: String = string.clone();
-    output.pop()
+    output
+        .pop()
         .map(|last| unicode_successor(last))
         .flatten()
         .map(|next| {
@@ -47,52 +47,77 @@ pub fn string_successor(string: String) -> Option<String> {
         })
 }
 
-trait LogOk<T> {
-    fn log_to_ok(self) -> Option<T>;
-}
-
-impl<T, E> LogOk<T> for Result<T, E> where E: Debug {
-    fn log_to_ok(self) -> Option<T> {
-        match self {
-            Ok(t) => Some(t),
-            Err(e) => { eprintln!("{:?}", e); None }
-        }
-    }
-}
-
-pub fn kv_filter(domain: String) -> impl warp::Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-
+pub fn kv_filter(
+    domain: String,
+) -> impl warp::Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let db_arc = Arc::new(DB::open_default(domain).unwrap());
     let db_middleware = warp::any().map(move || Arc::clone(&db_arc));
 
-
-    let get_table = warp::path("table")
+    let get_table = warp::get()
+        .and(warp::path("table"))
         .and(warp::path::param())
         .and(db_middleware.clone())
         .map(|table: String, db: Arc<DB>| {
 
             DBPath::new(table, None)
-                .map_err(|e| {
-                    eprintln!("{:?}", e);
-                    warp::reject::reject()
-                }).ok().map(|path| {
-                    db.get(path.to_string().as_bytes())
-                        .map_err(|e| {
-                            eprintln!("{:?}", e);
-                        }).ok()
-                }).flatten().map(|value| {
-                    value.map(|bytes| {
-                            from_utf8(bytes.as_ref())
-                            .map(|s| warp::reply::with_status(s.to_string(), StatusCode::OK))
-                            .map_err(|e| {
-                                eprintln!("{:?}", e);
-                            }).ok()
-                        }).flatten()
+                .log_to_ok()
+                .map(|raw_path| {
+                    let path = raw_path.to_string();
+                    let next = string_successor(&path)?;
+                    Some((path, next))
+                })
+                .flatten()
+                .map(|tuple| {
+                    let (path, next) = tuple;
+                    let mut iter_opts = ReadOptions::default();
+                    iter_opts.set_iterate_upper_bound(next);
+                    iter_opts.set_iterate_lower_bound(path);
+
+                    let values = db.iterator_opt(IteratorMode::Start, iter_opts)
+                        .filter_map(|(key, value)| {
+                            Some((from_utf8(&key).log_to_ok()?.to_string(),
+                            from_utf8(&value).log_to_ok()?.to_string()))
+                        })
+                        .collect::<Vec<(String, String)>>();
+
+                    serde_json::to_string(&values).log_to_ok()
                 }).flatten()
-                .unwrap_or_else(|| warp::reply::with_status("Not Found".to_string(), StatusCode::NOT_FOUND))
+                .map(|json| {
+                    warp::reply::with_status(json, StatusCode::OK)
+                })
+                .unwrap_or_else(|| {
+                    warp::reply::with_status("Not Found".to_string(), StatusCode::NOT_FOUND)
+                })
         });
 
-        get_table
+    let get_value = warp::get()
+        .and(warp::path("table"))
+        .and(warp::path::param())
+        .and(warp::path("key"))
+        .and(warp::path::param())
+        .and(db_middleware.clone())
+        .map(|table: String, key: String, db: Arc<DB>| {
+            DBPath::new(table, Some(key))
+                .log_to_ok()
+                .map(|path| db.get(path.to_string().as_bytes()).log_to_ok())
+                .flatten()
+                .map(|value| {
+                    value
+                        .map(|bytes| {
+                            from_utf8(bytes.as_ref())
+                                .map(|s| warp::reply::with_status(s.to_string(), StatusCode::OK))
+                                .log_to_ok()
+                        })
+                        .flatten()
+                })
+                .flatten()
+                .unwrap_or_else(|| {
+                    warp::reply::with_status("Not Found".to_string(), StatusCode::NOT_FOUND)
+                })
+        });
+
+
+    get_table
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -110,24 +135,32 @@ impl ToString for DBError {
             AsciiSeparatorInTableName => "ASCII SEPARATOR IN TABLE NAME",
             ZeroLengthKey => "ASCII SEPARATOR IN KEY NAME",
             AsciiSeparatorInKeyName => "ZERO LENGTH KEY (NOT EQUIVLAENT TO NONE)",
-        }.to_string()
+        }
+        .to_string()
     }
 }
 
 #[derive(Debug)]
 struct DBPath {
     table: String,
-    maybe_key: Option<String>
+    maybe_key: Option<String>,
 }
 
 impl DBPath {
-    fn new<'a, T>(raw_table: T, maybe_raw_key: Option<T>) -> Result<Self, DBError> where T: AsRef<str> {
+    fn new<'a, T>(raw_table: T, maybe_raw_key: Option<T>) -> Result<Self, DBError>
+    where
+        T: AsRef<str>,
+    {
         let table: String = raw_table.as_ref().nfc().collect();
-        let maybe_key: Option<String> = maybe_raw_key.map(|raw_key| raw_key.as_ref().nfc().collect() );
+        let maybe_key: Option<String> =
+            maybe_raw_key.map(|raw_key| raw_key.as_ref().nfc().collect());
 
         let separators: &[char] = SEPARATORS.as_ref();
 
-        let dirty_key = maybe_key.as_ref().map(|key| key.contains(separators)).unwrap_or(false);
+        let dirty_key = maybe_key
+            .as_ref()
+            .map(|key| key.contains(separators))
+            .unwrap_or(false);
         let some_empty_key = maybe_key.as_ref().map(|key| key.len() < 1).unwrap_or(false);
 
         if table.len() < 1 {
@@ -187,7 +220,10 @@ mod tests {
         assert!(unicode_successor(from_u32(0xD7FF).unwrap()).unwrap() == from_u32(0xE000).unwrap());
         assert!(unicode_successor(from_u32(0xE000).unwrap()).unwrap() == from_u32(0xE001).unwrap());
         assert!(unicode_successor(from_u32(0xFAD9).unwrap()).unwrap() == from_u32(0xFADA).unwrap());
-        assert!(unicode_successor(from_u32(UNICODE_LIMIT - 1).unwrap()).unwrap() == from_u32(UNICODE_LIMIT).unwrap());
+        assert!(
+            unicode_successor(from_u32(UNICODE_LIMIT - 1).unwrap()).unwrap()
+                == from_u32(UNICODE_LIMIT).unwrap()
+        );
 
         unsafe {
             assert!(unicode_successor(from_u32_unchecked(0xD8AA)).is_none());
