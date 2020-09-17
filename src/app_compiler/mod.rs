@@ -13,7 +13,7 @@ const COMPILE_EXTS: [&str; 3] = ["ts", "tsx", "jsx"];
 pub const TARGET: &str = "target";
 pub const PUBLIC: &str = "public";
 const SERVER: &str = "server";
-const CLIENT: &str = "client";
+// const CLIENT: &str = "client";
 
 pub fn compile_all() {
     let started = Instant::now();
@@ -76,7 +76,7 @@ pub fn construct_target_paths(path_buf: &PathBuf) -> Targets {
     let mut path_iter = path.iter();
 
     let apps_folder = path_iter.next().unwrap();
-    
+
     let org = path_iter.next().unwrap();
     let app = path_iter.next().unwrap();
 

@@ -122,7 +122,10 @@ impl Reject for AdminError {}
 
 async fn get_domains() -> Result<String, Rejection> {
     config::get_domain_statuses().await
-        .map_err(|e| warp::reject::custom(AdminError::AppSerializeError))
+        .map_err(|e| {
+            eprintln!("{:?}", e);
+            warp::reject::custom(AdminError::AppSerializeError)
+         })
 }
 
 async fn put_domain(domain_name: String) -> Result<String, Rejection> {

@@ -2,10 +2,11 @@ use std::char::from_u32;
 use std::fmt::Debug;
 use std::str::from_utf8;
 use std::sync::Arc;
+use std::path::PathBuf;
 
 use rocksdb::{ ReadOptions, DB, IteratorMode };
 use unicode_normalization::UnicodeNormalization;
-use warp::{http::StatusCode, Filter, Rejection, Reply};
+use warp::{http::StatusCode, Filter, Rejection, Reply, hyper::body::Bytes};
 use serde_json;
 
 use self::DBError::*;
@@ -47,68 +48,93 @@ pub fn string_successor(string: &String) -> Option<String> {
         })
 }
 
+pub fn get_table (table: String, db: Arc<DB>) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
+
+    DBPath::new(table, None)
+        .log_to_ok()
+        .map(|raw_path| {
+            let path = raw_path.to_string();
+            let next = string_successor(&path)?;
+            Some((path, next))
+        })
+        .flatten()
+        .map(|tuple| {
+            let (path, next) = tuple;
+            let mut iter_opts = ReadOptions::default();
+            iter_opts.set_iterate_upper_bound(next);
+            iter_opts.set_iterate_lower_bound(path);
+
+            let values = db.iterator_opt(IteratorMode::Start, iter_opts)
+                .filter_map(|(key, value)| {
+                    Some((key.into(), value.into()))
+                })
+                .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
+
+            values
+        })
+}
+
+pub fn get_value(table: String, key: String, db: Arc<DB>) -> Option<Vec<u8>> {
+    DBPath::new(table, Some(key))
+        .log_to_ok()
+        .map(|path| db.get(path.to_string().as_bytes()).log_to_ok())
+        .flatten()
+        .flatten()
+}
+
+pub fn put_value(table: String, key: String, value: Vec<u8>, db: Arc<DB>) -> bool {
+            DBPath::new(table, Some(key))
+                .log_to_ok()
+                .map(|path| db.put(path.to_string().as_bytes(), value).log_to_ok())
+                .flatten()
+                .is_some()
+}
+
+
+pub fn delete_value(table: String, key: String, db: Arc<DB>) -> bool {
+        DBPath::new(table, Some(key))
+            .log_to_ok()
+            .map(|path| db.delete(path.to_string().as_bytes()).log_to_ok())
+            .flatten()
+            .is_some()
+}
+
+
 pub fn kv_filter(
     domain: String,
 ) -> impl warp::Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    let db_arc = Arc::new(DB::open_default(domain).unwrap());
+    let path: PathBuf = [".", "res", "db", &domain].iter().collect();
+    let db_arc = Arc::new(DB::open_default(path).unwrap());
     let db_middleware = warp::any().map(move || Arc::clone(&db_arc));
 
-    let get_table = warp::get()
+    let get_table_route = warp::get()
         .and(warp::path("table"))
         .and(warp::path::param())
         .and(db_middleware.clone())
         .map(|table: String, db: Arc<DB>| {
-
-            DBPath::new(table, None)
-                .log_to_ok()
-                .map(|raw_path| {
-                    let path = raw_path.to_string();
-                    let next = string_successor(&path)?;
-                    Some((path, next))
-                })
-                .flatten()
-                .map(|tuple| {
-                    let (path, next) = tuple;
-                    let mut iter_opts = ReadOptions::default();
-                    iter_opts.set_iterate_upper_bound(next);
-                    iter_opts.set_iterate_lower_bound(path);
-
-                    let values = db.iterator_opt(IteratorMode::Start, iter_opts)
-                        .filter_map(|(key, value)| {
-                            Some((from_utf8(&key).log_to_ok()?.to_string(),
-                            from_utf8(&value).log_to_ok()?.to_string()))
-                        })
-                        .collect::<Vec<(String, String)>>();
-
-                    serde_json::to_string(&values).log_to_ok()
-                }).flatten()
-                .map(|json| {
-                    warp::reply::with_status(json, StatusCode::OK)
-                })
-                .unwrap_or_else(|| {
-                    warp::reply::with_status("Not Found".to_string(), StatusCode::NOT_FOUND)
-                })
+            get_table(table, db).map(|tuples| {
+                serde_json::to_string(&tuples).log_to_ok()
+            })
+            .flatten()
+            .map(|out| {
+                warp::reply::with_status(out, StatusCode::OK)
+            })
+            .unwrap_or_else(|| {
+                warp::reply::with_status("Not Found".to_string(), StatusCode::NOT_FOUND)
+            })
         });
 
-    let get_value = warp::get()
+    let get_value_route = warp::get()
         .and(warp::path("table"))
         .and(warp::path::param())
         .and(warp::path("key"))
         .and(warp::path::param())
         .and(db_middleware.clone())
         .map(|table: String, key: String, db: Arc<DB>| {
-            DBPath::new(table, Some(key))
-                .log_to_ok()
-                .map(|path| db.get(path.to_string().as_bytes()).log_to_ok())
-                .flatten()
-                .map(|value| {
-                    value
-                        .map(|bytes| {
-                            from_utf8(bytes.as_ref())
-                                .map(|s| warp::reply::with_status(s.to_string(), StatusCode::OK))
-                                .log_to_ok()
-                        })
-                        .flatten()
+                get_value(table, key, db).map(|value| {
+                    from_utf8(&value)
+                        .map(|s| warp::reply::with_status(s.to_string(), StatusCode::OK))
+                        .log_to_ok()
                 })
                 .flatten()
                 .unwrap_or_else(|| {
@@ -116,8 +142,37 @@ pub fn kv_filter(
                 })
         });
 
+    let put_value_route = warp::put()
+        .and(warp::path("table"))
+        .and(warp::path::param())
+        .and(warp::path("key"))
+        .and(warp::path::param())
+        .and(warp::body::bytes())
+        .and(db_middleware.clone())
+        .map(|table: String, key: String, value: Bytes, db: Arc<DB> | {
+            if put_value(table, key, value.to_vec(), db) {
+                warp::reply::with_status("\"Ok\"".to_string(), StatusCode::OK)
+            } else {
+                warp::reply::with_status("\"Internal Error\"".to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        });
 
-    get_table
+    let delete_value_route = warp::delete()
+        .and(warp::path("table"))
+        .and(warp::path::param())
+        .and(warp::path("key"))
+        .and(warp::path::param())
+        .and(db_middleware.clone())
+        .map(|table: String, key: String, db: Arc<DB> | {
+            if delete_value(table, key, db) {
+                warp::reply::with_status("\"Ok\"".to_string(), StatusCode::OK)
+            } else {
+                warp::reply::with_status("\"Internal Error\"".to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        });
+
+
+    get_value_route.or(get_table_route).or(put_value_route).or(delete_value_route)
 }
 
 #[derive(Debug, PartialEq, Eq)]

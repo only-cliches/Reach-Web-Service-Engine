@@ -1,2 +1,4 @@
 /target
 /apps/*/target
+/public/*
+/res/db

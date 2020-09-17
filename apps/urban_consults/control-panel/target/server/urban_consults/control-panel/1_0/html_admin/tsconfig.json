@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "outDir": "dst",
-    "rootDir": "src"
+    "rootDir": "src",
+    "no": "edits"
   }
 }
