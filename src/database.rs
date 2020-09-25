@@ -60,13 +60,17 @@ pub fn get_table (table: String, db: Arc<DB>) -> Option<Vec<(Vec<u8>, Vec<u8>)>>
         .flatten()
         .map(|tuple| {
             let (path, next) = tuple;
+
+            let skipped = &path.as_bytes().len();
+
             let mut iter_opts = ReadOptions::default();
             iter_opts.set_iterate_upper_bound(next);
             iter_opts.set_iterate_lower_bound(path);
 
+
             let values = db.iterator_opt(IteratorMode::Start, iter_opts)
                 .filter_map(|(key, value)| {
-                    Some((key.into(), value.into()))
+                    Some((key.iter().copied().skip(*skipped).collect(), value.into()))
                 })
                 .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
 
@@ -102,9 +106,16 @@ pub fn delete_value(table: String, key: String, db: Arc<DB>) -> bool {
 
 pub fn kv_filter(
     domain: String,
+    maybe_db: Option<Arc<DB>>
 ) -> impl warp::Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    let path: PathBuf = [".", "res", "db", &domain].iter().collect();
-    let db_arc = Arc::new(DB::open_default(path).unwrap());
+
+    let db_arc = match maybe_db {
+        Some(db) => db,
+        None => {
+            let path: PathBuf = [".", "res", "db", &domain].iter().collect();
+            Arc::new(DB::open_default(path).unwrap())
+        }
+    };
     let db_middleware = warp::any().map(move || Arc::clone(&db_arc));
 
     let get_table_route = warp::get()

@@ -1,6 +1,14 @@
 use http::method::Method;
-use std::convert::Infallible;
 use warp::{reject::Reject, reply::with_status, Filter, Rejection, Reply};
+use rocksdb::DB;
+
+use std::convert::Infallible;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+pub use domain_servers::static_assets;
+
+use crate::database;
 
 mod domain_servers;
 
@@ -117,6 +125,7 @@ async fn file_watcher(method: Method) -> Result<impl warp::Reply, Rejection> {
 enum AdminError {
     AppSerializeError,
     DomainLoadingError,
+    DomainNameNotPermitted,
 }
 impl Reject for AdminError {}
 
@@ -128,10 +137,15 @@ async fn get_domains() -> Result<String, Rejection> {
          })
 }
 
-async fn put_domain(domain_name: String) -> Result<String, Rejection> {
+async fn put_domain(domain_name: String, db: Arc<DB>) -> Result<String, Rejection> {
+    if domain_name == "admin" {
+        return Err(warp::reject::custom(AdminError::DomainNameNotPermitted))
+    }
+
     config::start_domain_server(domain_name.clone())
         .await
         .map(|is_new| {
+            database::put_value("domain_list".to_string(), domain_name.clone(), vec!(true as u8), db);
             if is_new {
                 format!("Loaded domain {}", domain_name).to_string()
             } else {
@@ -152,13 +166,41 @@ async fn delete_domain(name: String) -> Result<String, Infallible> {
 pub async fn init() {
     config::init().await;
 
-    put_domain("example_domain".to_string()).await.unwrap();
+    async {
+        let path: PathBuf = [".", "res", "db", "admin"].iter().collect();
+        let db_arc = Arc::new(DB::open_default(path).unwrap());
+
+        let rows = database::get_table("domain_list".to_string(), Arc::clone(&db_arc));
+        let starting_servers = rows.iter()
+            .filter_map(move |row| {
+                let (raw_key, raw_value) = row.get(0)?;
+                let key = String::from_utf8(raw_key.to_vec()).ok()?;
+                let value = *raw_value.get(0)? != 0;
+                if value {
+                    let db = Arc::clone(&db_arc);
+                    Some(put_domain(key, db))
+                } else {
+                    None
+                }
+            });
+
+            for server in starting_servers {
+                server.await.unwrap();
+            }
+    }.await;
+
+
 }
 
 // Returning a vec means that the whole set of admin resources can be built all at once here, and
 // attached to the domain where needed.
 pub fn resources() -> impl warp::Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let admin_path = warp::path("api").and(warp::path("admin"));
+
+    let db_path: PathBuf = [".", "res", "db", "admin"].iter().collect();
+    let db_arc = Arc::new(DB::open_default(db_path).unwrap());
+    let db_resource = db_arc.clone();
+    let db_middleware = warp::any().map(move || Arc::clone(&db_arc));
 
     let file_watcher = admin_path
         .and(warp::path("file_watcher"))
@@ -172,6 +214,7 @@ pub fn resources() -> impl warp::Filter<Extract = (impl Reply,), Error = Rejecti
     let put_domain_route = domains
         .and(warp::path::param())
         .and(warp::put())
+        .and(db_middleware)
         .and_then(put_domain);
 
     let delete_domain_route = domains
@@ -179,8 +222,11 @@ pub fn resources() -> impl warp::Filter<Extract = (impl Reply,), Error = Rejecti
         .and(warp::delete())
         .and_then(delete_domain);
 
+    let db_path = admin_path.and(warp::path("db")).and(database::kv_filter("admin".to_string(), Some(db_resource)));
+
     file_watcher
         .or(get_domains_route)
         .or(put_domain_route)
         .or(delete_domain_route)
+        .or(db_path)
 }

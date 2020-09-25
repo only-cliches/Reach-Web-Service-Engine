@@ -37,9 +37,10 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.default = (function (head, token) { return __awaiter(void 0, void 0, void 0, function () {
-    var str;
+    var str, bleurge;
     return __generator(this, function (_a) {
-        str = "";
+        str = "this is expanded and holds new data";
+        bleurge = "Nope";
         return [2 /*return*/];
     });
 }); });

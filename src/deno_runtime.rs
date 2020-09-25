@@ -105,7 +105,7 @@ impl Isolate {
     }
 }
 
-pub fn run_string_script(script: &str, input: String) -> String {
+pub fn _run_string_script(script: &str, input: String) -> String {
     let (tx, rx) = channel();
 
     let mut iso: Isolate = Isolate::new();

@@ -14,6 +14,7 @@ type Port = u16;
 pub struct Domain {
     port: Port,
     name: String,
+    init_data: String, //rendered html file.
     #[serde(skip)]
     shutdown_signal: oneshot::Sender<()>,
 }
@@ -29,8 +30,7 @@ impl Domain {
 }
 
 pub fn start(name: String) -> Domain {
-    let path: PathBuf = [".", "apps", &name].iter().collect();
-    let data_route = warp::path("api").and(warp::path("db")).and(kv_filter(name.clone()));
+    let data_route = warp::path("api").and(warp::path("db")).and(kv_filter(name.clone(), None));
     let main = main_routes();
     let static_ = static_assets();
     let server = warp::serve(data_route.or(static_).or(main));
@@ -44,11 +44,11 @@ pub fn start(name: String) -> Domain {
         srv.await
     });
 
-    Domain { port: addr.port(), name, shutdown_signal: tx }
+    Domain { port: addr.port(), name, init_data: "Not implemented".to_owned(), shutdown_signal: tx }
 
 }
 
-fn static_assets() -> impl warp::Filter<Extract = (impl Reply, ), Error = Rejection> + Clone {
+pub fn static_assets() -> impl warp::Filter<Extract = (impl Reply, ), Error = Rejection> + Clone {
 
     let path: PathBuf = [".", "public"].iter().collect();
 

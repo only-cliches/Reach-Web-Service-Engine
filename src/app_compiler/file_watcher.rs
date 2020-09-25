@@ -49,7 +49,7 @@ fn handle_event(event: Event) {
         .strip_prefix(current_dir().expect("Cannot access current dir."))
         .expect("Application directory invalid.");
 
-    let is_in_target = local_path.iter().skip(2).next().unwrap_or("".as_ref()) == TARGET;
+    let is_in_target = local_path.iter().skip(3).next().unwrap_or("".as_ref()) == TARGET;
 
     if !is_in_target {
         let local_path = local_path.to_path_buf();

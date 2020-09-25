@@ -81,8 +81,11 @@ pub fn construct_target_paths(path_buf: &PathBuf) -> Targets {
     let app = path_iter.next().unwrap();
 
     server.push(apps_folder);
+
     server.push(org);
+
     server.push(app);
+
     server.push(TARGET);
     server.push(SERVER);
 
@@ -136,7 +139,12 @@ pub fn compile_specific(path: &PathBuf) {
             }
         }
     } else {
-        copy(path, target.server).unwrap();
-        copy(path, target.client).unwrap();
+        let Targets { server, client } = target;
+        copy(path, &server)
+            .map_err(|e| { eprintln!("{:?}\n{:?}", e, server); () })
+            .unwrap();
+        copy(path, &client)
+            .map_err(|e| { eprintln!("{:?}\n{:?}", e, client); () })
+            .unwrap();
     }
 }
