@@ -1,3 +1,14 @@
+## 9/28/20
+
+  Better abstraction for the KV store to fix library coupling. Less type
+  pollution.
+
+  Made the db/table route now return actual JSON, db/table-bytes now returns raw
+  byte arrays, which was the previous behavior.
+
+  Completed put/delete and startup of domain servers, to use the DB and persist
+  across restarts.
+
 ## 9/25/20
 
   Updated the admin server with static file service, an html page, and a proper

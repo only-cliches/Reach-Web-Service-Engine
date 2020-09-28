@@ -12,8 +12,8 @@ mod deno_runtime;
 mod routes;
 mod util;
 
-use warp::Filter;
 use std::path::PathBuf;
+use warp::Filter;
 
 #[tokio::main]
 pub async fn main() {

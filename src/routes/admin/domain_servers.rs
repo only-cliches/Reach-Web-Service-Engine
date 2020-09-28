@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio::task;
-use warp::{ Filter, Rejection, Reply};
+use warp::{Filter, Rejection, Reply};
 
 use crate::database::kv_filter;
 // use crate::util::LogToOk;
@@ -21,16 +21,22 @@ pub struct Domain {
 
 impl Domain {
     pub fn stop(self) {
-        let Domain { name, shutdown_signal, .. } = self;
+        let Domain {
+            name,
+            shutdown_signal,
+            ..
+        } = self;
         match shutdown_signal.send(()) {
             Ok(_) => println!("Shut down server {}", name),
-            Err(e) => eprintln!("Error shutting down server {}\n{:?}", name, e)
+            Err(e) => eprintln!("Error shutting down server {}\n{:?}", name, e),
         };
     }
 }
 
 pub fn start(name: String) -> Domain {
-    let data_route = warp::path("api").and(warp::path("db")).and(kv_filter(name.clone(), None));
+    let data_route = warp::path("api")
+        .and(warp::path("db"))
+        .and(kv_filter(name.clone(), None));
     let main = main_routes();
     let static_ = static_assets();
     let server = warp::serve(data_route.or(static_).or(main));
@@ -40,30 +46,33 @@ pub fn start(name: String) -> Domain {
         rx.await.ok();
     });
 
-    task::spawn(async {
-        srv.await
-    });
+    task::spawn(async { srv.await });
 
-    Domain { port: addr.port(), name, init_data: "Not implemented".to_owned(), shutdown_signal: tx }
-
+    Domain {
+        port: addr.port(),
+        name,
+        init_data: "Not implemented".to_owned(),
+        shutdown_signal: tx,
+    }
 }
 
-pub fn static_assets() -> impl warp::Filter<Extract = (impl Reply, ), Error = Rejection> + Clone {
-
+pub fn static_assets() -> impl warp::Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let path: PathBuf = [".", "public"].iter().collect();
 
     warp::get()
         .and(warp::path("static-assets"))
         .and(warp::fs::dir(path))
-
 }
 
-fn main_routes() -> impl warp::Filter<Extract = (impl Reply, ), Error = Rejection> + Clone {
+fn main_routes() -> impl warp::Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     warp::get().map(|| {
         let title = "<title>This page</title>";
         let body_start = "<h1>This is the title</h1>";
         let body_end = "<p>The end</p>";
-        format!(include_str!("../../../res/html/format.html"), title, body_start, body_end)
+        format!(
+            include_str!("../../../res/html/format.html"),
+            title, body_start, body_end
+        )
     })
 }
 

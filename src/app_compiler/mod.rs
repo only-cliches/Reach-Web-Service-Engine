@@ -141,10 +141,16 @@ pub fn compile_specific(path: &PathBuf) {
     } else {
         let Targets { server, client } = target;
         copy(path, &server)
-            .map_err(|e| { eprintln!("{:?}\n{:?}", e, server); () })
+            .map_err(|e| {
+                eprintln!("{:?}\n{:?}", e, server);
+                ()
+            })
             .unwrap();
         copy(path, &client)
-            .map_err(|e| { eprintln!("{:?}\n{:?}", e, client); () })
+            .map_err(|e| {
+                eprintln!("{:?}\n{:?}", e, client);
+                ()
+            })
             .unwrap();
     }
 }

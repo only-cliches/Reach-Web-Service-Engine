@@ -1,13 +1,13 @@
 use std::char::from_u32;
 use std::fmt::Debug;
+use std::path::PathBuf;
 use std::str::from_utf8;
 use std::sync::Arc;
-use std::path::PathBuf;
 
-use rocksdb::{ ReadOptions, DB, IteratorMode };
-use unicode_normalization::UnicodeNormalization;
-use warp::{http::StatusCode, Filter, Rejection, Reply, hyper::body::Bytes};
+use rocksdb::{IteratorMode, ReadOptions, DB};
 use serde_json;
+use unicode_normalization::UnicodeNormalization;
+use warp::{http::StatusCode, hyper::body::Bytes, Filter, Rejection, Reply};
 
 use self::DBError::*;
 use crate::util::LogToOk;
@@ -48,91 +48,146 @@ pub fn string_successor(string: &String) -> Option<String> {
         })
 }
 
-pub fn get_table (table: String, db: Arc<DB>) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
+#[derive(Deref)]
+pub struct ADB(Arc<DB>);
 
-    DBPath::new(table, None)
-        .log_to_ok()
-        .map(|raw_path| {
-            let path = raw_path.to_string();
-            let next = string_successor(&path)?;
-            Some((path, next))
-        })
-        .flatten()
-        .map(|tuple| {
-            let (path, next) = tuple;
+impl ADB {
+    pub fn new(name: &str) -> Self {
+        let path: PathBuf = [".", "res", "db", name].iter().collect();
+        ADB(Arc::new(DB::open_default(path).unwrap()))
+    }
 
-            let skipped = &path.as_bytes().len();
+    pub fn get_table(&self, table: String) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
+        DBPath::new(table, None)
+            .log_to_ok()
+            .map(|raw_path| {
+                let path = raw_path.to_string();
+                let next = string_successor(&path)?;
+                Some((path, next))
+            })
+            .flatten()
+            .map(|tuple| {
+                let (path, next) = tuple;
 
-            let mut iter_opts = ReadOptions::default();
-            iter_opts.set_iterate_upper_bound(next);
-            iter_opts.set_iterate_lower_bound(path);
+                let skipped = &path.as_bytes().len();
 
+                let mut iter_opts = ReadOptions::default();
+                iter_opts.set_iterate_upper_bound(next);
+                iter_opts.set_iterate_lower_bound(path);
 
-            let values = db.iterator_opt(IteratorMode::Start, iter_opts)
-                .filter_map(|(key, value)| {
-                    Some((key.iter().copied().skip(*skipped).collect(), value.into()))
-                })
-                .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
+                let values = self
+                    .iterator_opt(IteratorMode::Start, iter_opts)
+                    .filter_map(|(key, value)| {
+                        Some((key.iter().copied().skip(*skipped).collect(), value.into()))
+                    })
+                    .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
 
-            values
-        })
-}
+                values
+            })
+    }
 
-pub fn get_value(table: String, key: String, db: Arc<DB>) -> Option<Vec<u8>> {
-    DBPath::new(table, Some(key))
-        .log_to_ok()
-        .map(|path| db.get(path.to_string().as_bytes()).log_to_ok())
-        .flatten()
-        .flatten()
-}
+    pub fn get_table_strings(&self, table: String) -> Option<Vec<(String, String)>> {
+        DBPath::new(table, None)
+            .log_to_ok()
+            .map(|raw_path| {
+                let path = raw_path.to_string();
+                let next = string_successor(&path)?;
+                Some((path, next))
+            })
+            .flatten()
+            .map(|tuple| {
+                let (path, next) = tuple;
 
-pub fn put_value(table: String, key: String, value: Vec<u8>, db: Arc<DB>) -> bool {
-            DBPath::new(table, Some(key))
-                .log_to_ok()
-                .map(|path| db.put(path.to_string().as_bytes(), value).log_to_ok())
-                .flatten()
-                .is_some()
-}
+                let skipped = &path.as_bytes().len();
 
+                let mut iter_opts = ReadOptions::default();
+                iter_opts.set_iterate_upper_bound(next);
+                iter_opts.set_iterate_lower_bound(path);
 
-pub fn delete_value(table: String, key: String, db: Arc<DB>) -> bool {
+                let values = self
+                    .iterator_opt(IteratorMode::Start, iter_opts)
+                    .filter_map(|(raw_key, raw_value)| {
+                        let key_vec: Vec<u8> = raw_key.iter().copied().skip(*skipped).collect();
+                        let value_vec: Vec<u8> = raw_value.into();
+
+                        let key: String = String::from_utf8_lossy(&key_vec).to_string();
+                        let value: String = String::from_utf8_lossy(&value_vec).to_string();
+
+                        Some((key, value))
+                    })
+                    .collect::<Vec<(String, String)>>();
+
+                values
+            })
+    }
+
+    pub fn get_value(&self, table: String, key: String) -> Option<Vec<u8>> {
         DBPath::new(table, Some(key))
             .log_to_ok()
-            .map(|path| db.delete(path.to_string().as_bytes()).log_to_ok())
+            .map(|path| self.get(path.to_string().as_bytes()).log_to_ok())
+            .flatten()
+            .flatten()
+    }
+
+    pub fn put_value(&self, table: String, key: String, value: Vec<u8>) -> bool {
+        DBPath::new(table, Some(key))
+            .log_to_ok()
+            .map(|path| self.put(path.to_string().as_bytes(), value).log_to_ok())
             .flatten()
             .is_some()
+    }
+
+    pub fn delete_value(&self, table: String, key: String) -> bool {
+        DBPath::new(table, Some(key))
+            .log_to_ok()
+            .map(|path| self.delete(path.to_string().as_bytes()).log_to_ok())
+            .flatten()
+            .is_some()
+    }
 }
 
+impl Clone for ADB {
+    fn clone(&self) -> Self {
+        let duplicate = self.0.clone();
+        ADB(duplicate)
+    }
+}
 
 pub fn kv_filter(
     domain: String,
-    maybe_db: Option<Arc<DB>>
+    maybe_db: Option<ADB>,
 ) -> impl warp::Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-
     let db_arc = match maybe_db {
         Some(db) => db,
-        None => {
-            let path: PathBuf = [".", "res", "db", &domain].iter().collect();
-            Arc::new(DB::open_default(path).unwrap())
-        }
+        None => ADB::new(&domain),
     };
-    let db_middleware = warp::any().map(move || Arc::clone(&db_arc));
+    let db_middleware = warp::any().map(move || db_arc.clone());
 
     let get_table_route = warp::get()
         .and(warp::path("table"))
         .and(warp::path::param())
         .and(db_middleware.clone())
-        .map(|table: String, db: Arc<DB>| {
-            get_table(table, db).map(|tuples| {
-                serde_json::to_string(&tuples).log_to_ok()
-            })
-            .flatten()
-            .map(|out| {
-                warp::reply::with_status(out, StatusCode::OK)
-            })
-            .unwrap_or_else(|| {
-                warp::reply::with_status("Not Found".to_string(), StatusCode::NOT_FOUND)
-            })
+        .map(|table: String, db: ADB| {
+            db.get_table_strings(table)
+                .map(|tuples| warp::reply::json(&tuples))
+                .map(|out| warp::reply::with_status(out, StatusCode::OK))
+                .unwrap_or_else(|| {
+                    warp::reply::with_status(warp::reply::json(&"Not Found".to_string()), StatusCode::NOT_FOUND)
+                })
+        });
+
+    let get_table_bytes_route = warp::get()
+        .and(warp::path("table-bytes"))
+        .and(warp::path::param())
+        .and(db_middleware.clone())
+        .map(|table: String, db: ADB| {
+            db.get_table(table)
+                .map(|tuples| serde_json::to_string(&tuples).log_to_ok())
+                .flatten()
+                .map(|out| warp::reply::with_status(out, StatusCode::OK))
+                .unwrap_or_else(|| {
+                    warp::reply::with_status("Not Found".to_string(), StatusCode::NOT_FOUND)
+                })
         });
 
     let get_value_route = warp::get()
@@ -141,8 +196,9 @@ pub fn kv_filter(
         .and(warp::path("key"))
         .and(warp::path::param())
         .and(db_middleware.clone())
-        .map(|table: String, key: String, db: Arc<DB>| {
-                get_value(table, key, db).map(|value| {
+        .map(|table: String, key: String, db: ADB| {
+            db.get_value(table, key)
+                .map(|value| {
                     from_utf8(&value)
                         .map(|s| warp::reply::with_status(s.to_string(), StatusCode::OK))
                         .log_to_ok()
@@ -160,11 +216,14 @@ pub fn kv_filter(
         .and(warp::path::param())
         .and(warp::body::bytes())
         .and(db_middleware.clone())
-        .map(|table: String, key: String, value: Bytes, db: Arc<DB> | {
-            if put_value(table, key, value.to_vec(), db) {
+        .map(|table: String, key: String, value: Bytes, db: ADB| {
+            if db.put_value(table, key, value.to_vec()) {
                 warp::reply::with_status("\"Ok\"".to_string(), StatusCode::OK)
             } else {
-                warp::reply::with_status("\"Internal Error\"".to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+                warp::reply::with_status(
+                    "\"Internal Error\"".to_string(),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                )
             }
         });
 
@@ -174,16 +233,22 @@ pub fn kv_filter(
         .and(warp::path("key"))
         .and(warp::path::param())
         .and(db_middleware.clone())
-        .map(|table: String, key: String, db: Arc<DB> | {
-            if delete_value(table, key, db) {
+        .map(|table: String, key: String, db: ADB| {
+            if db.delete_value(table, key) {
                 warp::reply::with_status("\"Ok\"".to_string(), StatusCode::OK)
             } else {
-                warp::reply::with_status("\"Internal Error\"".to_string(), StatusCode::INTERNAL_SERVER_ERROR)
+                warp::reply::with_status(
+                    "\"Internal Error\"".to_string(),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                )
             }
         });
 
-
-    get_value_route.or(get_table_route).or(put_value_route).or(delete_value_route)
+    get_value_route
+        .or(get_table_route)
+        .or(get_table_bytes_route)
+        .or(put_value_route)
+        .or(delete_value_route)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -241,7 +306,6 @@ impl DBPath {
             Ok(DBPath { table, maybe_key })
         }
     }
-
 }
 
 impl ToString for DBPath {
