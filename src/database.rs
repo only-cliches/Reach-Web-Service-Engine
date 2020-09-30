@@ -172,7 +172,10 @@ pub fn kv_filter(
                 .map(|tuples| warp::reply::json(&tuples))
                 .map(|out| warp::reply::with_status(out, StatusCode::OK))
                 .unwrap_or_else(|| {
-                    warp::reply::with_status(warp::reply::json(&"Not Found".to_string()), StatusCode::NOT_FOUND)
+                    warp::reply::with_status(
+                        warp::reply::json(&"Not Found".to_string()),
+                        StatusCode::NOT_FOUND,
+                    )
                 })
         });
 
