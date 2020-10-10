@@ -58,7 +58,7 @@ pub struct ADB(Arc<DB>);
 
 impl ADB {
     pub fn new(name: &str) -> Self {
-        let path: PathBuf = [".", "res", "db", name].iter().collect();
+        let path: PathBuf = [".", "root", "db", name].iter().collect();
         ADB(Arc::new(DB::open_default(path).unwrap()))
     }
 
