@@ -15,6 +15,8 @@ mod util;
 use std::path::PathBuf;
 use warp::Filter;
 
+const ROOT_FOLDER: &str = ".";
+
 #[tokio::main]
 pub async fn main() {
     #[cfg(windows)]
@@ -30,7 +32,7 @@ pub async fn main() {
         let admin_routes = routes::admin::resources();
         let static_files = routes::admin::static_assets();
 
-        let filepath = ["res", "html", "admin.html"]
+        let filepath = ["root", "res", "html", "admin.html"]
             .iter()
             .collect::<PathBuf>()
             .canonicalize()

@@ -91,7 +91,7 @@ fn get_main(db: ADB) -> String {
     let body_start = "<h1>This is the title</h1>";
     let body_end = "<p>The end</p>";
     format!(
-        include_str!("../../../res/html/format.html"),
+        include_str!("../../../root/res/html/format.html"),
         head, body_start, body_end
     )
 }

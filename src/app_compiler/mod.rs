@@ -18,7 +18,7 @@ const SERVER: &str = "server";
 pub fn compile_all() {
     let started = Instant::now();
 
-    let mut walker = WalkDir::new("apps").min_depth(2).into_iter();
+    let mut walker = WalkDir::new("root/apps").min_depth(2).into_iter();
 
     // Not the most efficient, but WalkDir is live. Walking the directory fully before processing
     // puts a nice stopper in case of accidental recursion.

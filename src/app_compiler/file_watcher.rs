@@ -9,7 +9,7 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use super::{compile_specific, construct_target_paths, TARGET};
 
-const FOLDER: &str = "apps";
+const FOLDER: &str = "root/apps";
 
 // MaybeWatcher lets start and stop be idempotent operations. Pass in whatever you've got, and the
 // functions will figure out what needs to happen.

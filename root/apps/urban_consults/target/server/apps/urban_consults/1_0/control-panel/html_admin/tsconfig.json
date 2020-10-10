@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "outDir": "dst",
+    "rootDir": "src",
+    "no": "edits"
+  }
+}

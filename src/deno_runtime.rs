@@ -44,7 +44,7 @@ impl Future for Isolate {
 impl Isolate {
     pub fn new() -> Self {
         let startup_data = StartupData::Script(Script {
-            source: include_str!("../res/prelude.js"),
+            source: include_str!("../root/res/prelude.js"),
             filename: "prelude.js",
         });
 

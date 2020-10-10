@@ -1,3 +1,7 @@
+## 9/29/20
+
+  Added a basic config template for Domains.
+
 ## 9/28/20
 
   Better abstraction for the KV store to fix library coupling. Less type

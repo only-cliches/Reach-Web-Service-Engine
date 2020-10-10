@@ -51,6 +51,11 @@ pub fn string_successor(string: &String) -> Option<String> {
 #[derive(Deref)]
 pub struct ADB(Arc<DB>);
 
+// enum ADB {
+//     Rocks(Arc<thing>)
+//     Etcd(Arc<thing>)
+// }
+
 impl ADB {
     pub fn new(name: &str) -> Self {
         let path: PathBuf = [".", "res", "db", name].iter().collect();
@@ -58,6 +63,11 @@ impl ADB {
     }
 
     pub fn get_table(&self, table: String) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
+
+        // match self {
+        //         Rocks(rdb) => do_stuff();
+        // }
+
         DBPath::new(table, None)
             .log_to_ok()
             .map(|raw_path| {
